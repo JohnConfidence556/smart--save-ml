@@ -1,171 +1,163 @@
-import pandas as pd
 import numpy as np
-from faker import Faker
-import random
-from datetime import datetime, timedelta
+import pandas as pd
+import os
 
-fake = Faker()
 np.random.seed(42)
-random.seed(42)
 
-# CONFIG
+N_USERS = 5000
+N_MONTHS = 12
+OUTPUT_DIR = "data"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-NUM_USERS = 5000
-START_DATE = datetime(2024, 1, 1)
-END_DATE = datetime(2024, 12, 31)
-DATE_RANGE = (END_DATE - START_DATE).days
 
-# Generate Users
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
-archetypes = [
-    "salary_earner",
-    "gig_worker",
-    "student",
-    "intentional_saver",
-    "passive_user"
-]
 
-users = []
 
-for user_id in range(1, NUM_USERS + 1):
-    archetype = random.choices(
-        archetypes,
-        weights=[0.35, 0.25, 0.15, 0.15, 0.10]
-    )[0]
+# 1USERS TABLE
 
-    users.append({
-        "user_id": user_id,
-        "age": random.randint(18, 55),
-        "archetype": archetype,
-        "signup_date": fake.date_between(start_date="-2y", end_date="today")
+
+def generate_users(n_users):
+
+    users = pd.DataFrame({
+        "user_id": np.arange(1, n_users + 1),
+        "age": np.random.randint(21, 60, n_users),
+        "income": np.random.normal(250000, 80000, n_users).clip(80000, 800000).astype(int),
     })
 
-users_df = pd.DataFrame(users)
+    return users
 
 
-# Generate Transactions
 
-transactions = []
-transaction_id = 1
-
-categories = ["food", "transport", "rent", "entertainment", "utilities", "airtime"]
-
-for _, user in users_df.iterrows():
-    balance = random.randint(10000, 50000)
-
-    for day_offset in range(DATE_RANGE):
-        current_date = START_DATE + timedelta(days=day_offset)
-
-        # Salary earners get paid monthly
-        if user["archetype"] in ["salary_earner", "intentional_saver"]:
-            if current_date.day == 25:
-                salary = random.randint(120000, 350000)
-                balance += salary
-                transactions.append({
-                    "transaction_id": transaction_id,
-                    "user_id": user["user_id"],
-                    "date": current_date,
-                    "amount": salary,
-                    "type": "credit",
-                    "category": "salary",
-                    "balance_after": balance
-                })
-                transaction_id += 1
-
-        # Gig workers random credits
-        if user["archetype"] == "gig_worker":
-            if random.random() < 0.05:
-                income = random.randint(20000, 100000)
-                balance += income
-                transactions.append({
-                    "transaction_id": transaction_id,
-                    "user_id": user["user_id"],
-                    "date": current_date,
-                    "amount": income,
-                    "type": "credit",
-                    "category": "gig_income",
-                    "balance_after": balance
-                })
-                transaction_id += 1
-
-        # Daily expenses
-        if random.random() < 0.6:
-            expense = random.randint(1000, 15000)
-            category = random.choice(categories)
-
-            if balance - expense > 0:
-                balance -= expense
-                transactions.append({
-                    "transaction_id": transaction_id,
-                    "user_id": user["user_id"],
-                    "date": current_date,
-                    "amount": expense,
-                    "type": "debit",
-                    "category": category,
-                    "balance_after": balance
-                })
-                transaction_id += 1
-
-transactions_df = pd.DataFrame(transactions)
+# BEHAVIOR SIMULATION
 
 
-# Generate Engagement Data
+def simulate_behavior(users):
+
+    transactions_rows = []
+    engagement_rows = []
+    nudge_rows = []
+
+    for _, user in users.iterrows():
+
+        engagement_score = np.random.uniform(0.4, 0.9)
+        deposit_propensity = np.random.uniform(0.3, 0.9)
+        churn_risk = np.random.uniform(-3, -1)
+        churned = False
+        decay_counter = 0
+        balance = np.random.uniform(5000, 20000)
+
+        for month in range(1, N_MONTHS + 1):
+
+            # If already churned → gradual decay
+            if churned:
+                engagement_score *= 0.5
+                deposit_propensity *= 0.3
+                decay_counter += 1
+
+            # Engagement evolution
+            engagement_score += np.random.normal(0, 0.05)
+            engagement_score = np.clip(engagement_score, 0, 1)
+
+            login_count = int(engagement_score * np.random.randint(5, 20))
+            session_duration = round(np.random.normal(engagement_score * 10, 2), 2)
+
+            # Deposit behavior depends on engagement + income
+            base_deposit = user["income"] * 0.05
+            deposit_amount = base_deposit * engagement_score * deposit_propensity
+            deposit_amount += np.random.normal(0, 2000)
+            deposit_amount = max(deposit_amount, 0)
+
+            withdrawal_amount = deposit_amount * np.random.uniform(0.3, 0.7)
+
+            balance += deposit_amount - withdrawal_amount
+
+            # Churn risk increases if low engagement
+            if engagement_score < 0.3:
+                churn_risk += 0.5
+            else:
+                churn_risk -= 0.2
+
+            churn_probability = sigmoid(churn_risk)
+
+            if not churned:
+                churn_event = np.random.binomial(1, churn_probability)
+                if churn_event == 1:
+                    churned = True
+
+            # Nudge logic
+            nudge_sent = 1 if engagement_score < 0.4 else 0
+            responded = 0
+            deposit_after_nudge = deposit_amount
+
+            if nudge_sent and not churned:
+                response_prob = 0.3 + engagement_score
+                responded = np.random.binomial(1, min(response_prob, 0.9))
+                if responded:
+                    uplift = np.random.normal(3000, 1000)
+                    deposit_after_nudge += max(uplift, 0)
+
+            # Save transactions
+            transactions_rows.append([
+                user["user_id"],
+                month,
+                round(deposit_amount, 2),
+                round(withdrawal_amount, 2),
+                round(balance, 2),
+                int(churned)
+            ])
+
+            # Save engagement
+            engagement_rows.append([
+                user["user_id"],
+                month,
+                login_count,
+                session_duration,
+                round(engagement_score, 3)
+            ])
+
+            # Save nudges
+            nudge_rows.append([
+                user["user_id"],
+                month,
+                nudge_sent,
+                responded,
+                round(deposit_after_nudge, 2)
+            ])
+
+    transactions = pd.DataFrame(transactions_rows, columns=[
+        "user_id", "month", "deposit_amount",
+        "withdrawal_amount", "balance", "churned"
+    ])
+
+    engagement = pd.DataFrame(engagement_rows, columns=[
+        "user_id", "month", "login_count",
+        "session_duration", "engagement_score"
+    ])
+
+    nudges = pd.DataFrame(nudge_rows, columns=[
+        "user_id", "month", "nudge_sent",
+        "responded", "deposit_after_nudge"
+    ])
+
+    return transactions, engagement, nudges
 
 
-engagement = []
-
-for _, user in users_df.iterrows():
-    for day_offset in range(DATE_RANGE):
-        current_date = START_DATE + timedelta(days=day_offset)
-
-        login_prob = 0.6
-
-        if user["archetype"] == "passive_user":
-            login_prob = 0.2
-
-        if user["archetype"] == "intentional_saver":
-            login_prob = 0.8
-
-        login = 1 if random.random() < login_prob else 0
-        push_open = 1 if random.random() < (login_prob * 0.7) else 0
-
-        engagement.append({
-            "user_id": user["user_id"],
-            "date": current_date,
-            "login_flag": login,
-            "push_open_flag": push_open
-        })
-
-engagement_df = pd.DataFrame(engagement)
+# MAIN
 
 
-# Generate Churn Labels
+if __name__ == "__main__":
 
-# Churn = no login in last 30 days of year
+    print("Generating users...")
+    users = generate_users(N_USERS)
 
-churn_labels = []
+    print("Simulating behavior...")
+    transactions, engagement, nudges = simulate_behavior(users)
 
-for user_id in users_df["user_id"]:
-    user_engagement = engagement_df[
-        (engagement_df["user_id"] == user_id) &
-        (engagement_df["date"] >= END_DATE - timedelta(days=30))
-    ]
+    users.to_csv(f"{OUTPUT_DIR}/users.csv", index=False)
+    transactions.to_csv(f"{OUTPUT_DIR}/transactions.csv", index=False)
+    engagement.to_csv(f"{OUTPUT_DIR}/engagement.csv", index=False)
+    nudges.to_csv(f"{OUTPUT_DIR}/nudges.csv", index=False)
 
-    churn_flag = 1 if user_engagement["login_flag"].sum() == 0 else 0
-
-    churn_labels.append({
-        "user_id": user_id,
-        "churn_flag": churn_flag
-    })
-
-churn_df = pd.DataFrame(churn_labels)
-
-
-# SAVE FILES
-
-users_df.to_csv("users.csv", index=False)
-transactions_df.to_csv("transactions.csv", index=False)
-engagement_df.to_csv("engagement.csv", index=False)
-churn_df.to_csv("churn_labels.csv", index=False)
-
-print("Synthetic dataset generated successfully!")
+    print("Level 2 behavioral datasets generated.")
