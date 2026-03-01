@@ -1,0 +1,13 @@
+# Data and Models
+data/*.csv
+models/*.pkl
+models/*.joblib
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Notebooks
+.ipynb_checkpoints/
